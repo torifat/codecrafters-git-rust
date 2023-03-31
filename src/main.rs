@@ -1,75 +1,56 @@
-#[allow(unused_imports)]
-use std::env;
-#[allow(unused_imports)]
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
+use std::io::Error;
 use std::io::Read;
 use std::path::Path;
 
-use clap::ArgAction;
-use clap::{Arg, Command};
+use clap::Parser;
+use cli::{Cli, SubCommands};
 use flate2::read::ZlibDecoder;
+use git_object::GitObject;
 
-fn cli() -> Command {
-    Command::new("git")
-        .subcommand(
-            Command::new("init")
-                .about("Create an empty Git repository or reinitialize an existing one"),
-        )
-        .subcommand(
-            Command::new("cat-file")
-                .about("Provide content or type and size information for repository objects")
-                .arg(
-                    Arg::new("pretty-print")
-                        .help("Pretty-print the contents of <object> based on its type.")
-                        .short('p')
-                        .action(ArgAction::SetTrue),
-                )
-                .arg(Arg::new("object").required(true)),
-        )
-}
+mod cli;
+mod git_object;
 
 fn main() -> std::io::Result<()> {
-    let matches = cli().get_matches();
+    let cli = Cli::parse();
 
-    match matches.subcommand() {
-        Some(("init", _sub_matches)) => {
+    match cli.command {
+        SubCommands::Init => {
             fs::create_dir(".git")
                 .and_then(|()| fs::create_dir(".git/objects"))
                 .and_then(|()| fs::create_dir(".git/refs"))
-                .and_then(|()| fs::write(".git/HEAD", "ref: refs/heads/master\n"))?;
-            println!("Initialized git directory");
-            Ok(())
+                .and_then(|()| fs::write(".git/HEAD", "ref: refs/heads/master\n"))
+                .map(|()| println!("Initialized git directory"))
         }
-        Some(("cat-file", sub_matches)) => {
-            // println!("{:?}", sub_matches.get_flag("pretty-print"));
-            // println!("{:?}", sub_matches.get_one::<String>("object"));
-
-            sub_matches
-                .get_one::<String>("object")
+        SubCommands::CatFile {
+            pretty_print: _,
+            object,
+        } => {
+            Result::<&str, Error>::Ok(object.as_str())
                 .map(|hash| hash.split_at(2))
                 .map(|(dir, file)| Path::new(".git/objects").join(dir).join(file))
-                .map(|path| File::open(path).expect("Unable to read file"))
+                .map(|path| File::open(path).expect("Unable to open the file"))
                 .map(BufReader::new)
-                .map(|buffered_input| {
-                    let mut decoder = ZlibDecoder::new(buffered_input);
-
+                .map(ZlibDecoder::new)
+                .map(|mut decoder| {
                     let mut decompressed_data = Vec::new();
                     decoder.read_to_end(&mut decompressed_data).unwrap();
+                    decompressed_data
+                })
+                .map(GitObject::from)
+                .map(|git_object| {
+                    println!("Object type: {:?}", git_object.object_type);
+                    println!("Size: {}", git_object.size);
 
-                    // Find the null byte (0x00) and skip the header
-                    let body_start = decompressed_data.iter().position(|&byte| byte == b'\x00');
-
-                    if let Some(pos) = body_start {
-                        print!("{}", String::from_utf8_lossy(&decompressed_data[pos + 1..]));
-                            
+                    // Convert the content to a String and print it
+                    if let Ok(content) = String::from_utf8(git_object.content) {
+                        print!("Content: {}", content);
                     } else {
-                        eprintln!("No null byte found in the decompressed data. Cannot separate header from body.");
+                        eprintln!("The object content is not valid UTF-8.");
                     }
-                });
-            Ok(())
+                })
         }
-        _ => unreachable!(),
     }
 }
