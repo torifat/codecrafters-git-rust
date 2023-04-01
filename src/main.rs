@@ -21,11 +21,13 @@ fn main() -> Result<()> {
         SubCommands::CatFile {
             pretty_print: _,
             object,
-        } => GitObject::new_from_object(&object)
-            .and_then(|git_object| String::from_utf8(git_object.content).map_err(Error::from))
-            .map(|content| print!("{}", content)),
+        } => GitObject::new_from_object(&object).and_then(|git_object| git_object.print()),
         SubCommands::HashObject { write: _, file } => GitObject::new_from_file(&file)
             .and_then(|git_object| git_object.write())
             .map(|hash| println!("{}", hash)),
+        SubCommands::LsTree {
+            name_only: _,
+            tree_ish,
+        } => GitObject::new_from_object(&tree_ish).and_then(|git_object| git_object.print()),
     }
 }

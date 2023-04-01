@@ -1,12 +1,13 @@
 use anyhow::{Context, Error, Result};
-use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use sha1::{Digest, Sha1};
 use std::fmt::{Display, Formatter, Result as ForamtResult};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
+use std::str::from_utf8;
 
 const OBJECTS_PATH: &str = ".git/objects";
 
@@ -25,6 +26,18 @@ impl Display for ObjectType {
             ObjectType::Commit => write!(f, "commit"),
             ObjectType::Tag => write!(f, "tag"),
             ObjectType::Tree => write!(f, "tree"),
+        }
+    }
+}
+
+impl From<&str> for ObjectType {
+    fn from(s: &str) -> Self {
+        match s {
+            "blob" => ObjectType::Blob,
+            "commit" => ObjectType::Commit,
+            "tag" => ObjectType::Tag,
+            "tree" => ObjectType::Tree,
+            _ => panic!("Invalid object type"),
         }
     }
 }
@@ -76,16 +89,43 @@ impl GitObject {
         format!("{} {}", self.object_type, self.content.len())
     }
 
+    // [mode] [file/folder name]\0[SHA-1 of referencing blob or tree]
     fn object(&self) -> Vec<u8> {
         [self.header().as_bytes(), &[0x00], self.content.as_slice()].concat()
     }
 
     pub fn hash(&self) -> String {
-        Sha1::digest(self.object())
-            .iter()
-            .map(|byte| format!("{:02x}", byte))
-            .collect::<Vec<String>>()
-            .join("")
+        hex::encode(Sha1::digest(self.object()))
+    }
+
+    pub fn print(&self) -> Result<()> {
+        // [mode] [file/folder name]\0[SHA-1 of referencing blob or tree]
+        match self.object_type {
+            ObjectType::Blob => print!("{}", from_utf8(self.content.as_slice())?),
+            ObjectType::Tree => {
+                let mut it = self.content.clone().into_iter().peekable();
+
+                while let Some(byte) = it.peek() {
+                    if *byte != b' ' {
+                        it.next();
+                    } else {
+                        // Skip the space character
+                        it.next();
+                        let tmp: Vec<u8> =
+                            it.by_ref().take_while(|&byte| byte != b'\x00').collect();
+                        println!("{}", from_utf8(tmp.as_slice())?);
+
+                        // Skip the SHA-1
+                        for _ in 0..20 {
+                            it.next();
+                        }
+                    }
+                }
+            }
+            _ => unreachable!(),
+        };
+
+        Ok(())
     }
 
     pub fn write(&self) -> Result<String> {
@@ -101,7 +141,7 @@ impl GitObject {
             })
             .map(BufWriter::new)
             .and_then(|mut writer| {
-                ZlibEncoder::new(&mut writer, Compression::default())
+                ZlibEncoder::new(&mut writer, Compression::fast())
                     .write_all(self.object().as_slice())
                     .context("Failed to write to file")
             })?;
@@ -116,20 +156,13 @@ impl From<Vec<u8>> for GitObject {
             .iter()
             .position(|&byte| byte == b'\x00')
             .expect("Failed to find the null byte");
-        let header = std::str::from_utf8(&data[..null_byte_position])
-            .expect("Failed to convert header to UTF-8");
+        let header =
+            from_utf8(&data[..null_byte_position]).expect("Failed to convert header to UTF-8");
         let header_parts: Vec<&str> = header.split(' ').collect();
 
         assert_eq!(header_parts.len(), 2, "Header must have exactly two parts");
 
-        let object_type = match header_parts[0] {
-            "blob" => ObjectType::Blob,
-            "commit" => ObjectType::Commit,
-            "tag" => ObjectType::Tag,
-            "tree" => ObjectType::Tree,
-            _ => panic!("Invalid object type"),
-        };
-
+        let object_type = header_parts[0].into();
         let content = data[null_byte_position + 1..].to_vec();
 
         GitObject {

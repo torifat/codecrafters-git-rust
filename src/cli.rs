@@ -29,5 +29,15 @@ pub enum SubCommands {
 
         /// The path to the file to hash.
         file: String,
-    }
+    },
+
+    /// List the contents of a tree object
+    LsTree {
+        /// List only filenames (instead of the "long" output), one per line. Cannot be combined with --object-only.
+        #[arg(long)]
+        name_only: bool,
+
+        /// Id of a tree-ish.
+        tree_ish: String,
+    },
 }
