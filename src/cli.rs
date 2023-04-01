@@ -20,4 +20,14 @@ pub enum SubCommands {
         /// The name of the object to show.
         object: String,
     },
+
+    /// Compute object ID and optionally creates a blob from a file
+    HashObject {
+        /// Actually write the object into the object database.
+        #[arg(short)]
+        write: bool,
+
+        /// The path to the file to hash.
+        file: String,
+    }
 }
